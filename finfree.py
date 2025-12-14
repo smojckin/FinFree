@@ -124,36 +124,29 @@ def verileri_getir(sembol, periyot, secilen_favoriler):
     except: return None
 
 # -----------------------------------------------------------------------------
-# PUANLAMA VE YORUM MOTORU
+# PUANLAMA MOTORU
 # -----------------------------------------------------------------------------
 def puanlama_yap(df):
     if df is None or df.empty: return None
     last = df.iloc[-1]; close = last['Close']
     
-    # Gruplar
     trend_puan = 0; trend_max = 0; trend_detay = []
-    osc_puan = 0; osc_max = 0; osc_detay = []
-    mom_puan = 0; mom_max = 0; mom_detay = []
-    
-    # Trend
     trend_max += 3; trend_puan += 3 if close > last['SMA_20'] else 0; trend_detay.append("Fiyat SMA20 Üzerinde" if close > last['SMA_20'] else "")
     trend_max += 3; trend_puan += 3 if close > last['EMA_50'] else 0
-    if 'SUPERTREND_DIR' in df.columns:
-        trend_max += 3; trend_puan += 3 if last['SUPERTREND_DIR'] == 1 else 0
+    if 'SUPERTREND_DIR' in df.columns: trend_max += 3; trend_puan += 3 if last['SUPERTREND_DIR'] == 1 else 0
 
-    # Osilatör
+    osc_puan = 0; osc_max = 0; osc_detay = []
     osc_max += 2; osc_puan += 2 if last['RSI'] < 30 else (1 if 50 < last['RSI'] < 70 else 0)
     osc_max += 2; osc_puan += 2 if last['MACD'] > last['MACD_SIG'] else 0
     osc_max += 2; osc_puan += 2 if last['FISHER'] > last['FISHER_SIG'] else 0
     osc_max += 2; osc_puan += 2 if close < last['BB_LOW'] else 0
 
-    # Momentum
+    mom_puan = 0; mom_max = 0; mom_detay = []
     mom_max += 1; mom_puan += 1 if last['STOCH_K'] < 20 and last['STOCH_K'] > last['STOCH_D'] else 0
     mom_max += 1; mom_puan += 1 if last['CCI'] < -100 else 0
     mom_max += 1; mom_puan += 1 if last['WILLR'] < -80 else 0
     mom_max += 1; mom_puan += 1 if last['ROC'] > 0 else 0
 
-    # Sonuç
     toplam_puan = trend_puan + osc_puan + mom_puan
     toplam_max = trend_max + osc_max + mom_max
     genel_yuzde = (toplam_puan / toplam_max) * 100 if toplam_max > 0 else 0
@@ -171,60 +164,59 @@ def detayli_yorum_getir(df, ind):
     
     if ind == "RSI":
         val = last['RSI']
-        if val < 30: yorum = f"RSI Değeri: {val:.2f} -> **AŞIRI SATIM (AL FIRSATI)**. Hisse çok ucuzlamış, tepki gelebilir."
-        elif val > 70: yorum = f"RSI Değeri: {val:.2f} -> **AŞIRI ALIM (SAT SİNYALİ)**. Hisse çok şişmiş, düzeltme gelebilir."
-        elif val > 50: yorum = f"RSI Değeri: {val:.2f} -> **POZİTİF**. Boğalar piyasaya hakim."
-        else: yorum = f"RSI Değeri: {val:.2f} -> **NEGATİF**. Ayılar piyasaya hakim."
+        if val < 30: yorum = f"**AŞIRI SATIM (AL FIRSATI)**. Değer: {val:.2f}"
+        elif val > 70: yorum = f"**AŞIRI ALIM (SAT SİNYALİ)**. Değer: {val:.2f}"
+        else: yorum = f"**NÖTR/TREND**. Değer: {val:.2f}"
     
     elif ind == "MACD":
-        if last['MACD'] > last['MACD_SIG']: yorum = f"MACD ({last['MACD']:.2f}) Sinyali ({last['MACD_SIG']:.2f}) yukarı kesti -> **AL SİNYALİ**. Trend yukarı dönüyor."
-        else: yorum = f"MACD ({last['MACD']:.2f}) Sinyali ({last['MACD_SIG']:.2f}) aşağı kesti -> **SAT SİNYALİ**. Düşüş trendi başlıyor."
+        if last['MACD'] > last['MACD_SIG']: yorum = "**AL SİNYALİ**. MACD sinyali yukarı kesti."
+        else: yorum = "**SAT SİNYALİ**. MACD sinyali aşağı kesti."
     
     elif ind == "FISHER":
         if last['FISHER'] > last['FISHER_SIG']:
-            if last['FISHER'] < -1.5: yorum = f"Fisher ({last['FISHER']:.2f}) dipten dönüyor -> **GÜÇLÜ AL**. En net dönüş sinyali."
-            else: yorum = f"Fisher ({last['FISHER']:.2f}) pozitif -> **AL**. Yükseliş destekleniyor."
+            durum = "**GÜÇLÜ AL** (Dip Dönüşü)" if last['FISHER'] < -1.5 else "**AL**"
+            yorum = f"{durum}. Fisher pozitif kesişimde."
         else:
-            if last['FISHER'] > 1.5: yorum = f"Fisher ({last['FISHER']:.2f}) tepeden dönüyor -> **GÜÇLÜ SAT**. Zirve görülmüş olabilir."
-            else: yorum = f"Fisher ({last['FISHER']:.2f}) negatif -> **SAT**. Düşüş baskısı var."
+            durum = "**GÜÇLÜ SAT** (Tepe Dönüşü)" if last['FISHER'] > 1.5 else "**SAT**"
+            yorum = f"{durum}. Fisher negatif kesişimde."
             
     elif ind in ["SMA", "EMA"]:
         col = 'SMA_20' if ind == "SMA" else 'EMA_50'
-        val = last[col]
-        if close > val: yorum = f"Fiyat ({close:.2f}), Ortalamanın ({val:.2f}) üzerinde -> **TREND POZİTİF**. Yön yukarı."
-        else: yorum = f"Fiyat ({close:.2f}), Ortalamanın ({val:.2f}) altında -> **TREND NEGATİF**. Yön aşağı."
+        if close > last[col]: yorum = f"**POZİTİF**. Fiyat ortalamanın ({last[col]:.2f}) üzerinde."
+        else: yorum = f"**NEGATİF**. Fiyat ortalamanın ({last[col]:.2f}) altında."
         
     elif ind == "BOLLINGER":
-        if close < last['BB_LOW']: yorum = f"Fiyat ({close:.2f}) alt bandı delmiş -> **GÜÇLÜ AL**. İstatistiksel olarak çok ucuz."
-        elif close > last['BB_UP']: yorum = f"Fiyat ({close:.2f}) üst bandı delmiş -> **GÜÇLÜ SAT**. İstatistiksel olarak çok pahalı."
-        else: yorum = "Fiyat bantlar içinde hareket ediyor. **NÖTR**."
+        if close < last['BB_LOW']: yorum = "**GÜÇLÜ AL**. Fiyat alt bandı deldi (Ucuz)."
+        elif close > last['BB_UP']: yorum = "**GÜÇLÜ SAT**. Fiyat üst bandı deldi (Pahalı)."
+        else: yorum = "**NÖTR**. Bant içi hareket."
         
     else:
-        # Genel Yorum (Diğerleri için)
-        found = False
         target_cols = [c for c in df.columns if c.startswith(ind)]
         if target_cols:
             vals = [f"{c}: {last[c]:.2f}" for c in target_cols]
-            yorum = f"**{ind} Değerleri:** " + ", ".join(vals)
+            yorum = f"**{ind} Güncel Değerler:** " + ", ".join(vals)
         elif ind in df.columns:
             yorum = f"**{ind} Değeri:** {last[ind]:.2f}"
         else:
-            yorum = "Hesaplanmış veri bulunamadı."
+            yorum = "Veri hesaplanamadı."
             
     return yorum
 
 # --- ARAYÜZ ---
+st.set_page_config(page_title="PROFESYONEL BORSA ANALİZİ", layout="wide", initial_sidebar_state="expanded")
+
 if 'edit_mode' not in st.session_state: st.session_state['edit_mode'] = False
 
-st.sidebar.title("🎛️ KONTROL PANELİ")
+st.sidebar.title("KONTROL PANELİ")
 
-# MOD KONTROLÜ (AYARLAR MI ANALİZ Mİ?)
+# --- FAVORİLERİ DÜZENLEME EKRANI ---
 if st.session_state['edit_mode']:
-    st.sidebar.header("⚙️ Favori Ayarları")
+    st.sidebar.header("Favori Ayarları")
+    st.sidebar.info("Burada seçtikleriniz her zaman varsayılan olarak gelir.")
     mevcut_favoriler = favorileri_yukle()
-    secilen_favoriler = st.sidebar.multiselect("Listeden Seçiniz:", INDIKATOR_LISTESI, default=mevcut_favoriler)
+    secilen_favoriler = st.sidebar.multiselect("Demirbaş Listesi:", INDIKATOR_LISTESI, default=mevcut_favoriler)
     
-    if st.sidebar.button("💾 KAYDET VE DÖN", type="primary"):
+    if st.sidebar.button("KAYDET VE DÖN", type="primary"):
         favorileri_kaydet(secilen_favoriler)
         st.session_state['edit_mode'] = False
         st.rerun()
@@ -233,29 +225,39 @@ if st.session_state['edit_mode']:
         st.session_state['edit_mode'] = False
         st.rerun()
 
+# --- NORMAL ANALİZ EKRANI ---
 else:
-    # ANALİZ MODU (NORMAL EKRAN)
     sembol_giris = st.sidebar.text_input("Hisse Sembolü:", "THYAO").upper()
     if ".IS" not in sembol_giris and "USD" not in sembol_giris: sembol_giris += ".IS"
 
     periyot_secimi = st.sidebar.select_slider("Analiz Süresi", options=["6m", "1y", "2y", "3y", "5y", "max"], value="1y")
     
-    if st.sidebar.button("🚀 ANALİZİ BAŞLAT", type="primary"):
-        st.session_state['run'] = True
+    # --- İNDİKATÖR EKLEME ---
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("İndikatör Ekle")
+    st.sidebar.caption("Favorilere eklemeden anlık bakmak istediklerin:")
+    hizli_indikatorler = st.sidebar.multiselect("İndikatör Seç:", INDIKATOR_LISTESI)
     
     st.sidebar.markdown("---")
-    if st.sidebar.button("⭐ Favorileri Düzenle"):
+    
+    if st.sidebar.button("ANALİZİ BAŞLAT", type="primary"):
+        st.session_state['run'] = True
+    
+    if st.sidebar.button("Favorileri Düzenle"):
         st.session_state['edit_mode'] = True
         st.rerun()
 
-# --- ANA EKRAN ---
-st.title(f"📊 {sembol_giris if 'sembol_giris' in locals() else 'BORSA'} ANALİZ PLATFORMU")
+# --- ANA EKRAN İÇERİĞİ ---
+st.title(f"{sembol_giris if 'sembol_giris' in locals() else 'BORSA'} ANALİZ PLATFORMU")
 
 if not st.session_state.get('edit_mode') and st.session_state.get('run'):
-    favoriler = favorileri_yukle()
+    kayitli_favoriler = favorileri_yukle()
+    anlik_secimler = hizli_indikatorler if 'hizli_indikatorler' in locals() else []
     
-    with st.spinner('Piyasa Konseyi Toplanıyor...'):
-        df = verileri_getir(sembol_giris, periyot_secimi, favoriler)
+    tum_gosterilecekler = list(set(kayitli_favoriler + anlik_secimler))
+    
+    with st.spinner('Veriler İşleniyor...'):
+        df = verileri_getir(sembol_giris, periyot_secimi, tum_gosterilecekler)
 
     if df is None:
         st.error("Veri alınamadı.")
@@ -263,13 +265,12 @@ if not st.session_state.get('edit_mode') and st.session_state.get('run'):
         skor_kart = puanlama_yap(df)
         last = df.iloc[-1]
         
-        # ÜST BİLGİLER
+        # KARTLAR
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Fiyat", f"{last['Close']:.2f}")
         c2.metric("RSI", f"{last.get('RSI', 50):.2f}")
-        
         skor = skor_kart["genel_skor"]
-        durum = "GÜÇLÜ AL" if skor >= 70 else ("AL" if skor >= 50 else "SAT/NÖTR")
+        durum = "GÜÇLÜ AL" if skor >= 70 else ("AL" if skor >= 50 else "NÖTR")
         c3.metric("TEKNİK SKOR", f"{skor:.0f}/100", delta=durum)
         
         # GRAFİK
@@ -281,7 +282,7 @@ if not st.session_state.get('edit_mode') and st.session_state.get('run'):
         st.plotly_chart(fig, use_container_width=True)
 
         # SEKMELER
-        tab1, tab2, tab3, tab4 = st.tabs(["📊 SKOR RAPORU", "📈 İNDİKATÖRLER", "🔢 VERİLER", "🏛️ ŞİRKET KARTI"])
+        tab1, tab2, tab3, tab4 = st.tabs(["SKOR RAPORU", "İNDİKATÖRLER", "VERİLER", "ŞİRKET KARTI"])
 
         with tab1:
             c_t, c_o, c_m = st.columns(3)
@@ -296,17 +297,16 @@ if not st.session_state.get('edit_mode') and st.session_state.get('run'):
                 st.progress(int(skor_kart['mom']['skor']))
 
         with tab2:
-            if not favoriler: st.info("Favori indikatör seçilmemiş. Sol menüden 'Favorileri Düzenle' diyerek ekleyiniz.")
-            for ind in favoriler:
-                st.subheader(f"📌 {ind} Analizi")
+            if not tum_gosterilecekler: 
+                st.info("Gösterilecek indikatör yok. Sol menüden Favori veya İndikatör Ekleme yapınız.")
+            
+            for ind in tum_gosterilecekler:
+                st.subheader(f"{ind} Analizi")
                 
-                # Önce Yorumu Yaz (İstediğin Gibi)
                 yorum = detayli_yorum_getir(df, ind)
                 st.info(yorum)
                 
-                # Sonra Grafiği Çiz
                 fig_ind = go.Figure()
-                # (Grafik çizim kodları aynı - Özetliyorum)
                 if ind == "RSI":
                     fig_ind.add_trace(go.Scatter(x=df.index, y=df['RSI'], line=dict(color='purple'), name='RSI'))
                     fig_ind.add_hline(y=70, line_color="red", line_dash="dash"); fig_ind.add_hline(y=30, line_color="green", line_dash="dash")
