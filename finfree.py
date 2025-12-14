@@ -7,6 +7,7 @@ import plotly.graph_objects as go
 import os
 import json
 import requests
+import warnings  # <-- İŞTE EKSİK OLAN BU SATIRDI
 
 # Uyarıları sustur
 warnings.filterwarnings("ignore")
@@ -38,7 +39,7 @@ def favorileri_kaydet(liste):
     with open(FAVORI_DOSYASI, 'w') as f: json.dump(liste, f)
 
 # -----------------------------------------------------------------------------
-# İŞ YATIRIM SCRAPER (GÜÇLENDİRİLMİŞ)
+# İŞ YATIRIM SCRAPER
 # -----------------------------------------------------------------------------
 @st.cache_data(ttl=3600)
 def is_yatirim_verileri(sembol):
@@ -53,6 +54,7 @@ def is_yatirim_verileri(sembol):
     }
     
     try:
+        # verify=False SSL hatasını önlemek içindir
         response = requests.get(url, headers=headers, timeout=15, verify=False)
         if response.status_code != 200: return None
         
@@ -96,7 +98,6 @@ def verileri_getir(sembol, periyot, secilen_favoriler):
         std20 = close.rolling(20).std()
         df['BB_UP'] = df['SMA_20'] + 2*std20; df['BB_LOW'] = df['SMA_20'] - 2*std20
         
-        # Puanlama için gerekli diğerleri
         lowest14 = low.rolling(14).min(); highest14 = high.rolling(14).max()
         df['STOCH_K'] = 100*((close-lowest14)/(highest14-lowest14+1e-9)); df['STOCH_D'] = df['STOCH_K'].rolling(3).mean()
         
@@ -124,76 +125,56 @@ def verileri_getir(sembol, periyot, secilen_favoriler):
     except: return None
 
 # -----------------------------------------------------------------------------
-# PUANLAMA MOTORU (AĞIR ABİLER, OPERASYONCULAR, ÇAYLAKLAR)
+# PUANLAMA MOTORU
 # -----------------------------------------------------------------------------
 def puanlama_yap(df):
     if df is None or df.empty: return None
     
     last = df.iloc[-1]; close = last['Close']
     
-    # --- GRUPLAR VE PUANLAR ---
-    # 1. TREND TAKİPÇİLERİ (Ağır Abiler) - Puan: 3
-    trend_puan = 0; trend_max = 0
-    trend_detay = []
+    trend_puan = 0; trend_max = 0; trend_detay = []
     
-    # SMA 20
     trend_max += 3
     if close > last['SMA_20']: trend_puan += 3; trend_detay.append("Fiyat SMA20 Üzerinde")
     
-    # EMA 50
     trend_max += 3
     if close > last['EMA_50']: trend_puan += 3; trend_detay.append("Fiyat EMA50 Üzerinde")
     
-    # SuperTrend (Varsa)
     if 'SUPERTREND_DIR' in df.columns:
         trend_max += 3
         if last['SUPERTREND_DIR'] == 1: trend_puan += 3; trend_detay.append("SuperTrend: AL")
 
-    # 2. OSİLATÖRLER (Operasyoncular) - Puan: 2
-    osc_puan = 0; osc_max = 0
-    osc_detay = []
+    osc_puan = 0; osc_max = 0; osc_detay = []
     
-    # RSI
     osc_max += 2
     if last['RSI'] < 30: osc_puan += 2; osc_detay.append("RSI: Aşırı Satım (AL)")
-    elif last['RSI'] > 70: pass # Satış
-    elif last['RSI'] > 50: osc_puan += 1; osc_detay.append("RSI: Pozitif Bölge") # Yarım puan
+    elif last['RSI'] > 50 and last['RSI'] < 70: osc_puan += 1; osc_detay.append("RSI: Pozitif Bölge")
     
-    # MACD
     osc_max += 2
     if last['MACD'] > last['MACD_SIG']: osc_puan += 2; osc_detay.append("MACD: Pozitif Kesişim")
     
-    # FISHER
     osc_max += 2
     if last['FISHER'] > last['FISHER_SIG']: 
-        if last['FISHER'] < -1.5: osc_puan += 3; osc_detay.append("Fisher: Dipten Dönüş (GÜÇLÜ)") # Bonus
+        if last['FISHER'] < -1.5: osc_puan += 3; osc_detay.append("Fisher: Dipten Dönüş (GÜÇLÜ)") 
         else: osc_puan += 2; osc_detay.append("Fisher: AL")
         
-    # Bollinger
     osc_max += 2
     if close < last['BB_LOW']: osc_puan += 2; osc_detay.append("Bollinger: Bant Dışı (Ucuz)")
 
-    # 3. MOMENTUM (Çaylaklar) - Puan: 1
-    mom_puan = 0; mom_max = 0
-    mom_detay = []
+    mom_puan = 0; mom_max = 0; mom_detay = []
     
-    # Stochastic
     mom_max += 1
     if last['STOCH_K'] < 20 and last['STOCH_K'] > last['STOCH_D']: mom_puan += 1; mom_detay.append("Stoch: Dip Kesişimi")
     
-    # CCI
     mom_max += 1
     if last['CCI'] < -100: mom_puan += 1; mom_detay.append("CCI: Aşırı Satım")
     
-    # Williams %R
     mom_max += 1
     if last['WILLR'] < -80: mom_puan += 1; mom_detay.append("WillR: Aşırı Satım")
     
-    # ROC
     mom_max += 1
     if last['ROC'] > 0: mom_puan += 1; mom_detay.append("ROC: Pozitif Momentum")
 
-    # SONUÇLAR
     toplam_puan = trend_puan + osc_puan + mom_puan
     toplam_max = trend_max + osc_max + mom_max
     genel_yuzde = (toplam_puan / toplam_max) * 100 if toplam_max > 0 else 0
@@ -237,23 +218,16 @@ if st.session_state['run']:
     if df is None:
         st.error("Veri alınamadı.")
     else:
-        # Puanlama Raporunu Hesapla
         skor_kart = puanlama_yap(df)
         
-        # --- ÜST BİLGİ KARTLARI ---
+        # ÜST BİLGİ KARTLARI
         last = df.iloc[-1]
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Fiyat", f"{last['Close']:.2f}")
         c2.metric("RSI", f"{last['RSI']:.2f}", delta="Aşırı Alım" if last['RSI']>70 else ("Aşırı Satım" if last['RSI']<30 else "Nötr"), delta_color="inverse")
         
-        # Skor Rengi
         skor = skor_kart["genel_skor"]
-        renk = "normal"
-        durum = "NÖTR"
-        if skor >= 70: durum = "GÜÇLÜ AL"; renk = "normal" # Yeşil default
-        elif skor >= 50: durum = "AL (Zayıf)"; renk = "off"
-        else: durum = "SAT / NÖTR"; renk = "inverse"
-        
+        durum = "GÜÇLÜ AL" if skor >= 70 else ("AL (Zayıf)" if skor >= 50 else "SAT / NÖTR")
         c3.metric("GENEL TEKNİK SKOR", f"{skor:.0f}/100", delta=durum)
         
         # Grafik
@@ -264,26 +238,23 @@ if st.session_state['run']:
         fig.update_layout(height=500, xaxis_rangeslider_visible=False)
         st.plotly_chart(fig, use_container_width=True)
 
-        # --- SEKMELER ---
+        # SEKMELER
         tab1, tab2, tab3, tab4 = st.tabs(["📊 KONSEY (SKOR) RAPORU", "📈 İNDİKATÖRLER", "🔢 VERİLER", "🏛️ ŞİRKET KARTI"])
 
         with tab1:
             st.subheader("TEKNİK PUANLAMA DETAYLARI")
             col_t, col_o, col_m = st.columns(3)
-            
             with col_t:
-                st.info(f"**TREND TAKİPÇİLERİ (Ağır Abiler)**\nSkor: %{skor_kart['trend']['skor']:.0f}")
+                st.info(f"**TREND TAKİPÇİLERİ**\nSkor: %{skor_kart['trend']['skor']:.0f}")
                 st.progress(int(skor_kart['trend']['skor']))
                 for d in skor_kart['trend']['detay']: st.write(f"✅ {d}")
-                if not skor_kart['trend']['detay']: st.write("❌ Olumlu sinyal yok (Trend Negatif)")
-            
+                if not skor_kart['trend']['detay']: st.write("❌ Olumlu sinyal yok")
             with col_o:
-                st.warning(f"**OSİLATÖRLER (Operasyoncular)**\nSkor: %{skor_kart['osc']['skor']:.0f}")
+                st.warning(f"**OSİLATÖRLER**\nSkor: %{skor_kart['osc']['skor']:.0f}")
                 st.progress(int(skor_kart['osc']['skor']))
                 for d in skor_kart['osc']['detay']: st.write(f"✅ {d}")
-            
             with col_m:
-                st.success(f"**MOMENTUM (Çaylaklar)**\nSkor: %{skor_kart['mom']['skor']:.0f}")
+                st.success(f"**MOMENTUM**\nSkor: %{skor_kart['mom']['skor']:.0f}")
                 st.progress(int(skor_kart['mom']['skor']))
                 for d in skor_kart['mom']['detay']: st.write(f"✅ {d}")
 
@@ -292,7 +263,6 @@ if st.session_state['run']:
             for ind in secilen_favoriler:
                 st.subheader(f"{ind}")
                 fig_ind = go.Figure()
-                
                 if ind == "RSI":
                     fig_ind.add_trace(go.Scatter(x=df.index, y=df['RSI'], line=dict(color='purple'), name='RSI'))
                     fig_ind.add_hline(y=70, line_color="red", line_dash="dash"); fig_ind.add_hline(y=30, line_color="green", line_dash="dash")
@@ -314,7 +284,6 @@ if st.session_state['run']:
                         fig_ind.add_trace(go.Scatter(x=df.index, y=df[ind], name=ind))
                         found = True
                     if not found: st.warning(f"{ind} verisi hesaplanamadı.")
-
                 fig_ind.update_layout(height=300, margin=dict(t=0, b=0, l=0, r=0))
                 st.plotly_chart(fig_ind, use_container_width=True, key=f"chart_{ind}")
 
