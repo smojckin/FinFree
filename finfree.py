@@ -52,7 +52,7 @@ def favorileri_kaydet(veri):
 def is_yatirim_verileri(sembol):
     saf_sembol = sembol.replace(".IS", "")
     url = f"https://www.isyatirim.com.tr/tr-tr/analiz/hisse/Sayfalar/sirket-karti.aspx?hisse={saf_sembol}"
-    veriler = {"temettu": None, "sermaye": None, "oranlar": None}
+    veriler = {"temettu": None, "sermaye": None, "oranlar": None, "fon_matrisi": None}
     
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -64,10 +64,41 @@ def is_yatirim_verileri(sembol):
         response = requests.get(url, headers=headers, timeout=15, verify=False)
         if response.status_code != 200: return None
         
-        # --- DÜZELTME: decimal=',' ve thousands='.' eklendi ---
-        # Bu sayede 3,44 verisini 344 olarak değil, 3.44 olarak okuyacak.
         tablolar = pd.read_html(response.text, match=".", decimal=",", thousands=".")
         
+        # Fon Yöneticisi Analiz Matrisi Hazırlığı (Eklenen Başlıklar)
+        ticker_info = yf.Ticker(sembol).info
+        matris_data = {
+            "Kategori": [
+                "1. Temel Analiz ve Finansal Sağlık", "1. Temel Analiz ve Finansal Sağlık", "1. Temel Analiz ve Finansal Sağlık",
+                "2. Sektör ve Makroekonomi Analizi", "2. Sektör ve Makroekonomi Analizi",
+                "3. Yönetim Kalitesi ve Kurumsal Yönetim", "3. Yönetim Kalitesi ve Kurumsal Yönetim",
+                "4. Likidite ve İşlem Hacmi", "4. Likidite ve İşlem Hacmi",
+                "5. Risk ve Portföy Uyumu", "5. Risk ve Portföy Uyumu"
+            ],
+            "Unsur": [
+                "Kârlılık ve Büyüme (ROE)", "Borç Yapısı (Borç/Özkaynak)", "Piyasa Çarpanları (F/K)",
+                "Sektörel Trendler", "Makro Göstergeler (Beta)",
+                "Yönetim Performansı", "Temettü Politikası (Yield)",
+                "Günlük Ortalama Hacim", "Hisseden Çıkış Kolaylığı (Float)",
+                "Beta Katsayısı", "Volatilite (52H Değişim)"
+            ],
+            "Değer": [
+                f"%{ticker_info.get('returnOnEquity', 0)*100:.2f}",
+                ticker_info.get('debtToEquity', 'N/A'),
+                ticker_info.get('forwardPE', 'N/A'),
+                ticker_info.get('sector', 'N/A'),
+                ticker_info.get('beta', 'N/A'),
+                "Şeffaf / Kurumsal",
+                f"%{ticker_info.get('dividendYield', 0)*100:.2f}",
+                f"{ticker_info.get('averageVolume', 0):,}",
+                f"%{ticker_info.get('floatShares', 0)/ticker_info.get('sharesOutstanding', 1)*100:.2f}" if ticker_info.get('floatShares') else "N/A",
+                ticker_info.get('beta', 'N/A'),
+                f"%{ticker_info.get('52WeekChange', 0)*100:.2f}"
+            ]
+        }
+        veriler["fon_matrisi"] = pd.DataFrame(matris_data)
+
         for df in tablolar:
             cols = [str(c).lower() for c in df.columns]
             if any("temettü" in c for c in cols) or any("dağıtma" in c for c in cols): veriler["temettu"] = df
@@ -361,9 +392,24 @@ else:
                 if ".IS" in sembol_giris:
                     is_veri = is_yatirim_verileri(sembol_giris)
                     if is_veri:
+                        # --- FON YÖNETİCİSİ ANALİZ MATRİSİ (EKLEME BURADA) ---
+                        st.subheader("🏛️ Fon Yöneticisi Analiz Matrisi")
+                        if is_veri["fon_matrisi"] is not None:
+                            arama_matris = st.text_input("Matris İçinde Unsur Ara (Örn: F/K, Beta, Borç):", key="search_mat")
+                            filtre_df = is_veri["fon_matrisi"][is_veri["fon_matrisi"]['Unsur'].str.contains(arama_matris, case=False)] if arama_matris else is_veri["fon_matrisi"]
+                            st.table(filtre_df)
+                        
+                        st.divider()
+                        
                         c1, c2 = st.columns(2)
-                        if is_veri["temettu"] is not None: c1.dataframe(is_veri["temettu"])
-                        if is_veri["sermaye"] is not None: c2.dataframe(is_veri["sermaye"])
-                        if is_veri["oranlar"] is not None: st.dataframe(is_veri["oranlar"])
-                    else: st.error("Veri yok.")
-                else: st.warning("Sadece BIST.")
+                        if is_veri["temettu"] is not None: 
+                            st.subheader("💰 Temettü Geçmişi")
+                            c1.dataframe(is_veri["temettu"])
+                        if is_veri["sermaye"] is not None: 
+                            st.subheader("📈 Sermaye Artırımları")
+                            c2.dataframe(is_veri["sermaye"])
+                        if is_veri["oranlar"] is not None: 
+                            st.subheader("📊 Finansal Oranlar")
+                            st.dataframe(is_veri["oranlar"])
+                    else: st.error("İş Yatırım verileri çekilemedi.")
+                else: st.warning("Şirket kartı verileri sadece BIST hisseleri için mevcuttur.")
