@@ -50,24 +50,23 @@ def favorileri_kaydet(veri):
 # -----------------------------------------------------------------------------
 @st.cache_data(ttl=3600)
 def is_yatirim_verileri(sembol):
-    saf_sembol = sembol.replace(".IS", "")
+    saf_sembol = sembol.replace(".IS", "").replace(".is", "")
     url = f"https://www.isyatirim.com.tr/tr-tr/analiz/hisse/Sayfalar/sirket-karti.aspx?hisse={saf_sembol}"
     veriler = {"temettu": None, "sermaye": None, "oranlar": None, "fon_matrisi": None}
     
+    # Session kullanarak bağlantıyı daha insansı yapalım
+    session = requests.Session()
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept-Language": "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7",
-        "Referer": "https://www.google.com/"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
     }
     
     try:
-        response = requests.get(url, headers=headers, timeout=15, verify=False)
-        if response.status_code != 200: return None
+        # Önce Yahoo verilerini hazırla (Yedek plan)
+        tk = yf.Ticker(sembol)
+        ticker_info = tk.info if tk.info else {}
         
-        tablolar = pd.read_html(response.text, match=".", decimal=",", thousands=".")
-        
-        # Fon Yöneticisi Analiz Matrisi Hazırlığı (Eklenen Başlıklar)
-        ticker_info = yf.Ticker(sembol).info
+        # Fon Matrisi (Yahoo'dan gelenlerle doldur)
         matris_data = {
             "Kategori": [
                 "1. Temel Analiz ve Finansal Sağlık", "1. Temel Analiz ve Finansal Sağlık", "1. Temel Analiz ve Finansal Sağlık",
@@ -84,28 +83,35 @@ def is_yatirim_verileri(sembol):
                 "Beta Katsayısı", "Volatilite (52H Değişim)"
             ],
             "Değer": [
-                f"%{ticker_info.get('returnOnEquity', 0)*100:.2f}",
+                f"%{ticker_info.get('returnOnEquity', 0)*100:.2f}" if ticker_info.get('returnOnEquity') else "Veri Yok",
                 ticker_info.get('debtToEquity', 'N/A'),
                 ticker_info.get('forwardPE', 'N/A'),
                 ticker_info.get('sector', 'N/A'),
                 ticker_info.get('beta', 'N/A'),
-                "Şeffaf / Kurumsal",
-                f"%{ticker_info.get('dividendYield', 0)*100:.2f}",
+                "Kurumsal Analiz Gerekli",
+                f"%{ticker_info.get('dividendYield', 0)*100:.2f}" if ticker_info.get('dividendYield') else "Yok/Düşük",
                 f"{ticker_info.get('averageVolume', 0):,}",
-                f"%{ticker_info.get('floatShares', 0)/ticker_info.get('sharesOutstanding', 1)*100:.2f}" if ticker_info.get('floatShares') else "N/A",
+                f"%{ticker_info.get('floatShares', 0)/ticker_info.get('sharesOutstanding', 1)*100:.2f}" if ticker_info.get('floatShares') and ticker_info.get('sharesOutstanding') else "N/A",
                 ticker_info.get('beta', 'N/A'),
-                f"%{ticker_info.get('52WeekChange', 0)*100:.2f}"
+                f"%{ticker_info.get('52WeekChange', 0)*100:.2f}" if ticker_info.get('52WeekChange') else "N/A"
             ]
         }
         veriler["fon_matrisi"] = pd.DataFrame(matris_data)
 
-        for df in tablolar:
-            cols = [str(c).lower() for c in df.columns]
-            if any("temettü" in c for c in cols) or any("dağıtma" in c for c in cols): veriler["temettu"] = df
-            elif any("bedelli" in c for c in cols) or any("bedelsiz" in c for c in cols) or any("bölünme" in c for c in cols): veriler["sermaye"] = df
-            elif any("f/k" in c for c in cols) or any("pd/dd" in c for c in cols) or any("özsermaye" in c for c in cols): veriler["oranlar"] = df
+        # Şimdi İş Yatırım'dan tabloları zorla alalım
+        response = session.get(url, headers=headers, timeout=20)
+        if response.status_code == 200:
+            tablolar = pd.read_html(response.text, decimal=",", thousands=".")
+            for df in tablolar:
+                cols = [str(c).lower() for c in df.columns]
+                if any("temettü" in c for c in cols): veriler["temettu"] = df
+                elif any("sermaye" in c for c in cols): veriler["sermaye"] = df
+                elif any("f/k" in c for c in cols): veriler["oranlar"] = df
+        
         return veriler
-    except Exception as e: return None
+    except Exception as e:
+        # İş Yatırım patlasa bile en azından matrisi döndür
+        return veriler if veriler["fon_matrisi"] is not None else None
 
 # --- VERİ HAZIRLAMA MOTORU ---
 @st.cache_data(ttl=600)
