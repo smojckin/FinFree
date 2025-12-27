@@ -201,34 +201,30 @@ def renk_belirle(val, tur):
         elif val < 0: return 'background-color: #f8d7da; color: red'
     return ''
 
-# --- MATRİS RENKLENDİRME MANTIĞI (YENİ EKLENDİ) ---
+# --- MATRİS RENKLENDİRME MANTIĞI ---
 def matris_renklendir(val, unsur):
-    # Değeri temizle ve floata çevir
     try:
         clean_val = str(val).replace('%', '').replace(',', '.')
         num_val = float(clean_val)
-    except:
-        return '' # Sayısal değilse renklendirme
+    except: return '' 
 
-    # Foncu Mantığına Göre Renklendirme
     if "F/K" in unsur or "Piyasa Çarpanları" in unsur:
-        if 0 < num_val < 8: return 'background-color: #d4edda; color: green' # Ucuz
-        elif num_val > 20: return 'background-color: #f8d7da; color: red' # Pahalı
+        if 0 < num_val < 8: return 'background-color: #d4edda; color: green' 
+        elif num_val > 20: return 'background-color: #f8d7da; color: red' 
     elif "Borç" in unsur:
-        if num_val < 50: return 'background-color: #d4edda; color: green' # Az borç
-        elif num_val > 100: return 'background-color: #f8d7da; color: red' # Çok borç
+        if num_val < 50: return 'background-color: #d4edda; color: green' 
+        elif num_val > 100: return 'background-color: #f8d7da; color: red' 
     elif "ROE" in unsur or "Özkaynak" in unsur:
-        if num_val > 20: return 'background-color: #d4edda; color: green' # Yüksek kârlılık
-        elif num_val < 5: return 'background-color: #f8d7da; color: red' # Düşük kârlılık
+        if num_val > 20: return 'background-color: #d4edda; color: green' 
+        elif num_val < 5: return 'background-color: #f8d7da; color: red' 
     elif "Temettü" in unsur:
-        if num_val > 4: return 'background-color: #d4edda; color: green' # İyi temettü
+        if num_val > 4: return 'background-color: #d4edda; color: green' 
     elif "Beta" in unsur:
-        if num_val > 1.5: return 'background-color: #fff3cd; color: #856404' # Yüksek Risk (Sarı)
-        elif num_val < 0.8: return 'background-color: #d1ecf1; color: #0c5460' # Düşük Risk (Mavi)
+        if num_val > 1.5: return 'background-color: #fff3cd; color: #856404' 
+        elif num_val < 0.8: return 'background-color: #d1ecf1; color: #0c5460' 
     elif "Volatilite" in unsur or "Değişim" in unsur:
          if num_val > 0: return 'color: green'
          else: return 'color: red'
-    
     return ''
 
 def detayli_yorum_getir(df, ind):
@@ -428,9 +424,9 @@ else:
                             arama_matris = st.text_input("Matris İçinde Unsur Ara:", key="search_mat")
                             filtre_df = is_veri["fon_matrisi"][is_veri["fon_matrisi"]['Unsur'].str.contains(arama_matris, case=False)] if arama_matris else is_veri["fon_matrisi"]
                             
-                            # --- RENKLENDİRME UYGULAMASI ---
-                            styler = filtre_df.style.apply(lambda x: [matris_renklendir(v, x['Unsur']) for v in x['Değer']], axis=1, subset=['Değer'])
-                            st.dataframe(styler, use_container_width=True) # Table yerine Dataframe kullandım stil için
+                            # --- HATASIZ RENKLENDİRME BURADA ---
+                            styler = filtre_df.style.apply(lambda x: [matris_renklendir(x['Değer'], x['Unsur']) if col == 'Değer' else '' for col in x.index], axis=1)
+                            st.dataframe(styler, use_container_width=True)
                         
                         st.divider()
                         c1, c2 = st.columns(2)
