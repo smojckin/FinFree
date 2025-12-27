@@ -201,6 +201,36 @@ def renk_belirle(val, tur):
         elif val < 0: return 'background-color: #f8d7da; color: red'
     return ''
 
+# --- MATRİS RENKLENDİRME MANTIĞI (YENİ EKLENDİ) ---
+def matris_renklendir(val, unsur):
+    # Değeri temizle ve floata çevir
+    try:
+        clean_val = str(val).replace('%', '').replace(',', '.')
+        num_val = float(clean_val)
+    except:
+        return '' # Sayısal değilse renklendirme
+
+    # Foncu Mantığına Göre Renklendirme
+    if "F/K" in unsur or "Piyasa Çarpanları" in unsur:
+        if 0 < num_val < 8: return 'background-color: #d4edda; color: green' # Ucuz
+        elif num_val > 20: return 'background-color: #f8d7da; color: red' # Pahalı
+    elif "Borç" in unsur:
+        if num_val < 50: return 'background-color: #d4edda; color: green' # Az borç
+        elif num_val > 100: return 'background-color: #f8d7da; color: red' # Çok borç
+    elif "ROE" in unsur or "Özkaynak" in unsur:
+        if num_val > 20: return 'background-color: #d4edda; color: green' # Yüksek kârlılık
+        elif num_val < 5: return 'background-color: #f8d7da; color: red' # Düşük kârlılık
+    elif "Temettü" in unsur:
+        if num_val > 4: return 'background-color: #d4edda; color: green' # İyi temettü
+    elif "Beta" in unsur:
+        if num_val > 1.5: return 'background-color: #fff3cd; color: #856404' # Yüksek Risk (Sarı)
+        elif num_val < 0.8: return 'background-color: #d1ecf1; color: #0c5460' # Düşük Risk (Mavi)
+    elif "Volatilite" in unsur or "Değişim" in unsur:
+         if num_val > 0: return 'color: green'
+         else: return 'color: red'
+    
+    return ''
+
 def detayli_yorum_getir(df, ind):
     last = df.iloc[-1]; close = last['Close']
     yorum = ""
@@ -397,7 +427,11 @@ else:
                         if is_veri["fon_matrisi"] is not None:
                             arama_matris = st.text_input("Matris İçinde Unsur Ara:", key="search_mat")
                             filtre_df = is_veri["fon_matrisi"][is_veri["fon_matrisi"]['Unsur'].str.contains(arama_matris, case=False)] if arama_matris else is_veri["fon_matrisi"]
-                            st.table(filtre_df)
+                            
+                            # --- RENKLENDİRME UYGULAMASI ---
+                            styler = filtre_df.style.apply(lambda x: [matris_renklendir(v, x['Unsur']) for v in x['Değer']], axis=1, subset=['Değer'])
+                            st.dataframe(styler, use_container_width=True) # Table yerine Dataframe kullandım stil için
+                        
                         st.divider()
                         c1, c2 = st.columns(2)
                         if is_veri["temettu"] is not None: c1.dataframe(is_veri["temettu"])
