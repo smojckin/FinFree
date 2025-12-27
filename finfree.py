@@ -8,6 +8,9 @@ import os
 import json
 import requests
 import warnings
+import time
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 # Uyarıları sustur
 warnings.filterwarnings("ignore")
@@ -32,7 +35,7 @@ INDIKATOR_LISTESI = [
 
 # --- YARDIMCI FONKSİYONLAR ---
 def favorileri_yukle():
-    varsayilan = {"indikatorler": ["RSI", "MACD", "SMA"], "hisseler": ["THYAO", "ASELS", "GARAN"]}
+    varsayilan = {"indikatorler": ["RSI", "MACD", "SMA"], "hisseler": ["THYAO.IS", "ASELS.IS", "GARAN.IS"]}
     if os.path.exists(FAVORI_DOSYASI):
         try:
             with open(FAVORI_DOSYASI, 'r') as f:
@@ -46,7 +49,7 @@ def favorileri_kaydet(veri):
     with open(FAVORI_DOSYASI, 'w') as f: json.dump(veri, f)
 
 # -----------------------------------------------------------------------------
-# İŞ YATIRIM SCRAPER (DÜZELTİLEN KISIM BURASI)
+# İŞ YATIRIM SCRAPER (ZIRHLI VE HİBRİT - GÜÇLENDİRİLDİ)
 # -----------------------------------------------------------------------------
 @st.cache_data(ttl=3600)
 def is_yatirim_verileri(sembol):
@@ -54,19 +57,24 @@ def is_yatirim_verileri(sembol):
     url = f"https://www.isyatirim.com.tr/tr-tr/analiz/hisse/Sayfalar/sirket-karti.aspx?hisse={saf_sembol}"
     veriler = {"temettu": None, "sermaye": None, "oranlar": None, "fon_matrisi": None}
     
-    # Session kullanarak bağlantıyı daha insansı yapalım
+    # Session ve Retry Ayarları
     session = requests.Session()
+    retry_strategy = Retry(total=3, backoff_factor=1, status_forcelist=[429, 500, 502, 503, 504])
+    adapter = HTTPAdapter(max_retries=retry_strategy)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
+        "Accept-Language": "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7"
     }
     
     try:
-        # Önce Yahoo verilerini hazırla (Yedek plan)
+        # Önce Yahoo Finance verilerini çek (Yedek Plan)
         tk = yf.Ticker(sembol)
         ticker_info = tk.info if tk.info else {}
         
-        # Fon Matrisi (Yahoo'dan gelenlerle doldur)
+        # Fon Yöneticisi Analiz Matrisi (Hibrit Dolum)
         matris_data = {
             "Kategori": [
                 "1. Temel Analiz ve Finansal Sağlık", "1. Temel Analiz ve Finansal Sağlık", "1. Temel Analiz ve Finansal Sağlık",
@@ -83,13 +91,13 @@ def is_yatirim_verileri(sembol):
                 "Beta Katsayısı", "Volatilite (52H Değişim)"
             ],
             "Değer": [
-                f"%{ticker_info.get('returnOnEquity', 0)*100:.2f}" if ticker_info.get('returnOnEquity') else "Veri Yok",
+                f"%{ticker_info.get('returnOnEquity', 0)*100:.2f}" if ticker_info.get('returnOnEquity') else "N/A",
                 ticker_info.get('debtToEquity', 'N/A'),
                 ticker_info.get('forwardPE', 'N/A'),
                 ticker_info.get('sector', 'N/A'),
                 ticker_info.get('beta', 'N/A'),
-                "Kurumsal Analiz Gerekli",
-                f"%{ticker_info.get('dividendYield', 0)*100:.2f}" if ticker_info.get('dividendYield') else "Yok/Düşük",
+                "Şeffaf / Kurumsal",
+                f"%{ticker_info.get('dividendYield', 0)*100:.2f}" if ticker_info.get('dividendYield') else "N/A",
                 f"{ticker_info.get('averageVolume', 0):,}",
                 f"%{ticker_info.get('floatShares', 0)/ticker_info.get('sharesOutstanding', 1)*100:.2f}" if ticker_info.get('floatShares') and ticker_info.get('sharesOutstanding') else "N/A",
                 ticker_info.get('beta', 'N/A'),
@@ -98,33 +106,41 @@ def is_yatirim_verileri(sembol):
         }
         veriler["fon_matrisi"] = pd.DataFrame(matris_data)
 
-        # Şimdi İş Yatırım'dan tabloları zorla alalım
-        response = session.get(url, headers=headers, timeout=20)
+        # İş Yatırım'dan tabloları çekmeyi dene
+        response = session.get(url, headers=headers, timeout=20, verify=False)
         if response.status_code == 200:
-            tablolar = pd.read_html(response.text, decimal=",", thousands=".")
+            tablolar = pd.read_html(response.text, match=".", decimal=",", thousands=".")
             for df in tablolar:
                 cols = [str(c).lower() for c in df.columns]
-                if any("temettü" in c for c in cols): veriler["temettu"] = df
-                elif any("sermaye" in c for c in cols): veriler["sermaye"] = df
-                elif any("f/k" in c for c in cols): veriler["oranlar"] = df
-        
+                if any("temettü" in c for c in cols) or any("dağıtma" in c for c in cols): veriler["temettu"] = df
+                elif any("bedelli" in c for c in cols) or any("bedelsiz" in c for c in cols) or any("bölünme" in c for c in cols): veriler["sermaye"] = df
+                elif any("f/k" in c for c in cols) or any("pd/dd" in c for c in cols) or any("özsermaye" in c for c in cols): veriler["oranlar"] = df
         return veriler
     except Exception as e:
-        # İş Yatırım patlasa bile en azından matrisi döndür
+        # Hata olsa dahi Yahoo'dan gelen matrisi döndür, dükkan boş kalmasın
         return veriler if veriler["fon_matrisi"] is not None else None
 
-# --- VERİ HAZIRLAMA MOTORU ---
+# --- VERİ HAZIRLAMA MOTORU (GÜÇLENDİRİLMİŞ RETRY MEKANİZMASI) ---
 @st.cache_data(ttl=600)
 def verileri_getir(sembol, periyot, secilen_favoriler):
     if periyot in ["6m", "1y", "2y"]: aralik = "1d"
     else: aralik = "1wk"
 
+    df = None
+    # 3 kere deneme yap (Veri çekme hatalarına karşı önlem)
+    for _ in range(3):
+        try:
+            df = yf.download(sembol, period=periyot, interval=aralik, progress=False, timeout=20)
+            if df is not None and not df.empty: break
+            time.sleep(1)
+        except: continue
+
+    if df is None or df.empty: return None
+    
     try:
-        df = yf.download(sembol, period=periyot, interval=aralik, progress=False)
-        if df.empty: return None
         if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.droplevel(1)
         
-        close = df['Close']; high = df['High']; low = df['Low']; volume = df['Volume']
+        close = df['Close']; high = df['High']; low = df['Low']
         
         # --- TEMEL HESAPLAMALAR ---
         delta = close.diff()
@@ -156,8 +172,7 @@ def verileri_getir(sembol, periyot, secilen_favoriler):
             if ind not in df.columns:
                 try:
                     if hasattr(df.ta, ind.lower()):
-                        method = getattr(df.ta, ind.lower())
-                        method(append=True)
+                        getattr(df.ta, ind.lower())(append=True)
                     else:
                         if ind == "SUPERTREND": df.ta.supertrend(append=True)
                         elif ind in ["PARABOLIC", "PSAR"]: df.ta.psar(append=True)
@@ -165,8 +180,7 @@ def verileri_getir(sembol, periyot, secilen_favoriler):
                         elif ind == "BBWIDTH": df.ta.bbands(append=True)
                 except: pass
 
-        df = df.dropna()
-        return df
+        return df.dropna()
     except: return None
 
 # --- RENKLENDİRME ---
@@ -190,7 +204,6 @@ def renk_belirle(val, tur):
 def detayli_yorum_getir(df, ind):
     last = df.iloc[-1]; close = last['Close']
     yorum = ""
-    
     if ind == "RSI":
         val = last['RSI']
         if val < 30: yorum = f"**AŞIRI SATIM (AL FIRSATI)**. Değer: {val:.2f}"
@@ -231,13 +244,11 @@ def detayli_yorum_getir(df, ind):
 st.sidebar.title("KONTROL PANELİ")
 secilen_mod = st.sidebar.radio("Mod Seçiniz:", ["Tek Hisse Analizi", "Radar (Karşılaştırma)", "Ayarlar & Favoriler"])
 
-# --- MOD 3: AYARLAR VE FAVORİLER ---
 if secilen_mod == "Ayarlar & Favoriler":
     st.header("⚙️ Ayarlar ve Favori Yönetimi")
     kayitli_veri = favorileri_yukle()
     mevcut_ind = kayitli_veri.get("indikatorler", [])
     mevcut_his = kayitli_veri.get("hisseler", [])
-    
     col1, col2 = st.columns(2)
     with col1:
         st.subheader("1. Favori Hisseler")
@@ -258,7 +269,6 @@ if secilen_mod == "Ayarlar & Favoriler":
             kayitli_veri["hisseler"] = mevcut_his
             favorileri_kaydet(kayitli_veri)
             st.rerun()
-
     with col2:
         st.subheader("2. Favori İndikatörler")
         yeni_secimler = st.multiselect("İndikatör Listesi:", INDIKATOR_LISTESI, default=mevcut_ind)
@@ -267,13 +277,11 @@ if secilen_mod == "Ayarlar & Favoriler":
             favorileri_kaydet(kayitli_veri)
             st.success("İndikatör listesi güncellendi!")
 
-# --- MOD 2: RADAR (KARŞILAŞTIRMA) ---
 elif secilen_mod == "Radar (Karşılaştırma)":
     st.header("📡 Piyasa Radarı (Karşılaştırmalı Analiz)")
     kayitli_veri = favorileri_yukle()
     fav_hisseler = kayitli_veri.get("hisseler", [])
     fav_indler = kayitli_veri.get("indikatorler", [])
-    
     if not fav_hisseler or not fav_indler:
         st.warning("Favori hisse veya indikatör listeniz boş. Ayarlar sekmesinden ekleme yapınız.")
     else:
@@ -297,7 +305,6 @@ elif secilen_mod == "Radar (Karşılaştırma)":
                     veriler.append(satir)
                 ilerleme.progress((i + 1) / len(fav_hisseler))
             ilerleme.empty()
-            
             radar_df = pd.DataFrame(veriler)
             if not radar_df.empty:
                 st.subheader("Radar Sonuçları")
@@ -308,30 +315,30 @@ elif secilen_mod == "Radar (Karşılaştırma)":
                 st.info("🟢 Yeşil: Al Sinyali / Ucuz | 🔴 Kırmızı: Sat Sinyali / Pahalı")
             else: st.error("Veri alınamadı.")
 
-# --- MOD 1: TEK HİSSE ANALİZİ (KLASİK) ---
 else:
-    sembol_giris = st.sidebar.text_input("Hisse Sembolü:", "THYAO").upper()
-    if ".IS" not in sembol_giris and "USD" not in sembol_giris: sembol_giris += ".IS"
-    periyot_secimi = st.sidebar.select_slider("Analiz Süresi", options=["6m", "1y", "2y", "3y", "5y", "max"], value="1y")
+    # --- DİNAMİK BAŞLIK VE GÜÇLENDİRİLMİŞ ANALİZ ---
+    sembol_giris = st.sidebar.text_input("Hisse Sembolü Ara:", "").upper()
+    # Eğer boşsa varsayılan olarak THYAO.IS göster ama başlığa yazma
+    aktif_sembol = sembol_giris if sembol_giris else "THYAO"
+    if ".IS" not in aktif_sembol and "USD" not in aktif_sembol: aktif_sembol += ".IS"
     
+    periyot_secimi = st.sidebar.select_slider("Analiz Süresi", options=["6m", "1y", "2y", "3y", "5y", "max"], value="1y")
     st.sidebar.markdown("---")
-    st.sidebar.subheader("İndikatör Ekle")
-    hizli_indikatorler = st.sidebar.multiselect("İndikatör Seç:", INDIKATOR_LISTESI)
-    st.sidebar.markdown("---")
+    hizli_indikatorler = st.sidebar.multiselect("Ekstra İndikatör Seç:", INDIKATOR_LISTESI)
     
     if st.sidebar.button("ANALİZİ BAŞLAT", type="primary"): st.session_state['run_analiz'] = True
     
-    st.title(f"📊 {sembol_giris} ANALİZ PLATFORMU")
+    # Dinamik Başlık: Sadece aratılan hisseyi yazar
+    st.title(f"📊 {aktif_sembol} ANALİZ PLATFORMU")
 
     if st.session_state.get('run_analiz'):
         kayitli = favorileri_yukle()
-        fav_ind = kayitli.get("indikatorler", [])
-        tum_gosterilecekler = list(set(fav_ind + hizli_indikatorler))
+        tum_gosterilecekler = list(set(kayitli.get("indikatorler", []) + hizli_indikatorler))
         
-        with st.spinner('Veriler İşleniyor...'):
-            df = verileri_getir(sembol_giris, periyot_secimi, tum_gosterilecekler)
+        with st.spinner(f'{aktif_sembol} verileri çekiliyor ve işleniyor...'):
+            df = verileri_getir(aktif_sembol, periyot_secimi, tum_gosterilecekler)
 
-        if df is None: st.error("Veri alınamadı.")
+        if df is None: st.error(f"{aktif_sembol} verisi çekilemedi. Sembolün doğruluğundan emin olun.")
         else:
             def puanlama_yap_local(df):
                 if df is None or df.empty: return None
@@ -340,20 +347,19 @@ else:
                 t_m+=3; t_p+=3 if close>last['SMA_20'] else 0
                 t_m+=3; t_p+=3 if close>last['EMA_50'] else 0
                 o_p=0; o_m=0
-                o_m+=2; o_p+=2 if last['RSI']<30 else (1 if 50<last['RSI']<70 else 0)
-                o_m+=2; o_p+=2 if last['MACD']>last['MACD_SIG'] else 0
-                o_m+=2; o_p+=2 if last['FISHER']>last['FISHER_SIG'] else 0
+                o_m+=2; o_p+=2 if last.get('RSI', 50)<30 else (1 if 50<last.get('RSI', 50)<70 else 0)
+                o_m+=2; o_p+=2 if last.get('MACD', 0)>last.get('MACD_SIG', 0) else 0
+                o_m+=2; o_p+=2 if last.get('FISHER', 0)>last.get('FISHER_SIG', 0) else 0
                 m_p=0; m_m=0
-                m_m+=1; m_p+=1 if last['STOCH_K']<20 and last['STOCH_K']>last['STOCH_D'] else 0
+                m_m+=1; m_p+=1 if last.get('STOCH_K', 50)<20 else 0
                 genel = ((t_p+o_p+m_p)/(t_m+o_m+m_m))*100
                 return {"genel": genel, "trend": (t_p/t_m)*100, "osc": (o_p/o_m)*100, "mom": (m_p/m_m)*100}
 
             skor = puanlama_yap_local(df)
             last = df.iloc[-1]
-            
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("Fiyat", f"{last['Close']:.2f}")
-            c2.metric("RSI", f"{last.get('RSI', 50):.2f}")
+            c2.metric("RSI", f"{last.get('RSI', 0):.2f}")
             durum = "GÜÇLÜ AL" if skor["genel"] >= 70 else ("AL" if skor["genel"] >= 50 else "NÖTR")
             c3.metric("TEKNİK SKOR", f"{skor['genel']:.0f}/100", delta=durum)
             
@@ -365,57 +371,36 @@ else:
             st.plotly_chart(fig, use_container_width=True)
 
             tab1, tab2, tab3, tab4 = st.tabs(["SKOR RAPORU", "İNDİKATÖRLER", "VERİLER", "ŞİRKET KARTI"])
-
             with tab1:
                 c_t, c_o, c_m = st.columns(3)
                 c_t.info(f"TREND: %{skor['trend']:.0f}"); c_t.progress(int(skor['trend']))
                 c_o.warning(f"OSİLATÖR: %{skor['osc']:.0f}"); c_o.progress(int(skor['osc']))
                 c_m.success(f"MOMENTUM: %{skor['mom']:.0f}"); c_m.progress(int(skor['mom']))
-
             with tab2:
                 for ind in tum_gosterilecekler:
                     st.subheader(f"📌 {ind} Analizi")
-                    yorum = detayli_yorum_getir(df, ind)
-                    st.info(f"**Durum:** {yorum}")
-                    
+                    st.info(f"**Durum:** {detayli_yorum_getir(df, ind)}")
                     fig_ind = go.Figure()
-                    if ind in df.columns: fig_ind.add_trace(go.Scatter(x=df.index, y=df[ind], name=ind))
-                    else:
-                        for col in df.columns:
-                            if col.startswith(ind): fig_ind.add_trace(go.Scatter(x=df.index, y=df[col], name=col))
-                    
+                    for col in [c for c in df.columns if c.startswith(ind)]: fig_ind.add_trace(go.Scatter(x=df.index, y=df[col], name=col))
                     if ind=="RSI": 
                         fig_ind.add_hline(y=70, line_color="red", line_dash="dash")
                         fig_ind.add_hline(y=30, line_color="green", line_dash="dash")
-                    
                     fig_ind.update_layout(height=300, margin=dict(t=0,b=0,l=0,r=0))
                     st.plotly_chart(fig_ind, use_container_width=True, key=f"c_{ind}")
                     st.divider()
-
             with tab3: st.dataframe(df.style.highlight_max(axis=0), use_container_width=True)
-
             with tab4:
-                if ".IS" in sembol_giris:
-                    is_veri = is_yatirim_verileri(sembol_giris)
+                if ".IS" in aktif_sembol:
+                    is_veri = is_yatirim_verileri(aktif_sembol)
                     if is_veri:
-                        # --- FON YÖNETİCİSİ ANALİZ MATRİSİ (EKLEME BURADA) ---
                         st.subheader("🏛️ Fon Yöneticisi Analiz Matrisi")
                         if is_veri["fon_matrisi"] is not None:
-                            arama_matris = st.text_input("Matris İçinde Unsur Ara (Örn: F/K, Beta, Borç):", key="search_mat")
+                            arama_matris = st.text_input("Matris İçinde Unsur Ara:", key="search_mat")
                             filtre_df = is_veri["fon_matrisi"][is_veri["fon_matrisi"]['Unsur'].str.contains(arama_matris, case=False)] if arama_matris else is_veri["fon_matrisi"]
                             st.table(filtre_df)
-                        
                         st.divider()
-                        
                         c1, c2 = st.columns(2)
-                        if is_veri["temettu"] is not None: 
-                            st.subheader("💰 Temettü Geçmişi")
-                            c1.dataframe(is_veri["temettu"])
-                        if is_veri["sermaye"] is not None: 
-                            st.subheader("📈 Sermaye Artırımları")
-                            c2.dataframe(is_veri["sermaye"])
-                        if is_veri["oranlar"] is not None: 
-                            st.subheader("📊 Finansal Oranlar")
-                            st.dataframe(is_veri["oranlar"])
-                    else: st.error("İş Yatırım verileri çekilemedi.")
-                else: st.warning("Şirket kartı verileri sadece BIST hisseleri için mevcuttur.")
+                        if is_veri["temettu"] is not None: c1.dataframe(is_veri["temettu"])
+                        if is_veri["sermaye"] is not None: c2.dataframe(is_veri["sermaye"])
+                        if is_veri["oranlar"] is not None: st.dataframe(is_veri["oranlar"])
+                    else: st.error("Veri bulunamadı.")
