@@ -712,12 +712,18 @@ elif st.session_state.sayfa == 'hisse_detay':
             st.subheader("🏛️ Fon Yöneticisi Karar Destek Matrisi")
             st.write("Aşağıdaki veriler, kurumsal yatırımcıların baktığı temel kriterlere göre renklendirilmiştir.")
             
-            # İş Yatırım / Yahoo verilerini çek
-            fund_data = is_yatirim_verileri(sembol)
-            
-            if fund_data["fon_matrisi"] is not None:
-                matris_df = fund_data["fon_matrisi"]
-                
+# Yeni hali bu, her ihtimali hesaba kat:
+fund_data = is_yatirim_verileri(sembol)
+
+# 1. fund_data var mı? 2. İçinde "fon_matrisi" anahtarı var mı? 3. O anahtarın içi dolu mu?
+if fund_data and isinstance(fund_data, dict) and fund_data.get("fon_matrisi") is not None:
+    matris_df = fund_data["fon_matrisi"]
+    # Buradan sonra matris_df ile ne halt yiyeceksen yiyebilirsin.
+else:
+    # Veri gelmediğinde programın patlamaması için bir uyarı çak:
+    st.warning(f"{sembol} kodlu arkadaşın verisi çekilemedi. Ya sembol yanlış ya da İş Yatırım'ın keyfi yerinde değil.")
+    matris_df = None # Boş bırak ki aşağıda başka yerler de patlamasın
+    
                 # Renklendirme fonksiyonunu uygula
                 styler_mat = matris_df.style.apply(
                     lambda x: [matris_renklendir(x['Değer'], x['Unsur']) if col == 'Değer' else '' for col in x.index], 
